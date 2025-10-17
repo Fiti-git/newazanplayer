@@ -1,30 +1,34 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   FlatList,
-  ScrollView,
-  ImageBackground,
   PermissionsAndroid,
   Platform,
   Alert,
+  ScrollView,
+  ImageBackground,
 } from 'react-native';
-import { BleManager } from 'react-native-ble-plx';
-import useDisableBack from '../hooks/useDisableBack.js';
+import BluetoothSerial from 'react-native-bluetooth-serial-next';
 import styles from './PairingStyles';
+import useDisableBack from '../hooks/useDisableBack';
+import ConnectionStatusIndicator from '../components/ConnectionStatusIndicator.js';
 
 const Pairing = ({ navigation }) => {
   useDisableBack();
-  const manager = new BleManager();
 
   const [devices, setDevices] = useState([]);
   const [scanning, setScanning] = useState(false);
   const [selectedDeviceId, setSelectedDeviceId] = useState(null);
   const [language, setLanguage] = useState('en');
+  const scanInterval = useRef(null);
+  const [loading, setLoading] = useState(false);
+
 
   useEffect(() => {
-    return () => manager.destroy(); // cleanup on unmount
+    if (Platform.OS === 'android') requestPermissions();
+    return () => stopAutoScan();
   }, []);
 
   const requestPermissions = async () => {
@@ -36,7 +40,7 @@ const Pairing = ({ navigation }) => {
       ]);
 
       const allGranted = Object.values(granted).every(
-        (perm) => perm === PermissionsAndroid.RESULTS.GRANTED
+        perm => perm === PermissionsAndroid.RESULTS.GRANTED
       );
 
       if (!allGranted) {
@@ -51,54 +55,129 @@ const Pairing = ({ navigation }) => {
     const permission = await requestPermissions();
     if (!permission) return;
 
-    setDevices([]);
     setScanning(true);
-
-    manager.startDeviceScan(null, null, (error, device) => {
-      if (error) {
-        console.error('Scan error:', error);
-        setScanning(false);
-        return;
-      }
-
-      if (device?.name && !devices.some((d) => d.id === device.id)) {
-        setDevices((prev) => [...prev, device]);
-      }
-    });
-
-    setTimeout(() => {
-      manager.stopDeviceScan();
-      setScanning(false);
-    }, 10000); // scan for 10 sec
+    startAutoScan();
   };
 
-  const handleDeviceSelect = (deviceId) => {
-    setSelectedDeviceId(deviceId);
+  const startAutoScan = () => {
+    stopAutoScan();
+    scanDevices();
+    scanInterval.current = setInterval(scanDevices, 3000);
+  };
+
+  const stopAutoScan = () => {
+    if (scanInterval.current) {
+      clearInterval(scanInterval.current);
+      scanInterval.current = null;
+    }
+  };
+
+  const scanDevices = async () => {
+    try {
+      const unpaired = await BluetoothSerial.listUnpaired();
+      const paired = await BluetoothSerial.list();
+      const allDevices = [...unpaired, ...paired];
+  
+      const filtered = allDevices.filter((device) => {
+        return device.name && device.name.includes("ESP32_AzanPlayer");
+      });
+  
+      // Avoid duplication
+      const uniqueDevices = [];
+      const seen = new Set();
+      for (const device of filtered) {
+        const key = device.id;
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniqueDevices.push(device);
+        }
+      }
+  
+      setDevices(uniqueDevices);
+    } catch (error) {
+      console.log('Bluetooth scan error:', error);
+      setDevices([]); // Reset on error
+    }
+  };
+  
+
+  const handleDeviceSelect = (id) => {
+    setSelectedDeviceId(id);
+    stopAutoScan();
   };
 
   const handlePair = async () => {
     const device = devices.find((d) => d.id === selectedDeviceId);
     if (!device) return;
-
+  
+    setLoading(true); // 🔄 Start loading
+  
     try {
-      await manager.connectToDevice(device.id);
-      await device.discoverAllServicesAndCharacteristics();
-      Alert.alert('✅ Paired', `Connected to ${device.name}`);
-      navigation.navigate('DeviceRegistration', { device });
+      const pairedDevices = await BluetoothSerial.list();
+      const isAlreadyPaired = pairedDevices.some((d) => d.id === device.id);
+  
+      let connected = false;
+  
+      if (isAlreadyPaired) {
+        connected = await BluetoothSerial.connect(device.id);
+      } else {
+        const pairingResult = await BluetoothSerial.pairDevice(device.id);
+        if (pairingResult) {
+          connected = await BluetoothSerial.connect(device.id);
+        }
+      }
+  
+      if (connected) {
+        await BluetoothSerial.write("AZAN_SECURE_2024\n");
+  
+        setTimeout(async () => {
+          let result = '';
+          try {
+            result = await BluetoothSerial.readFromDevice();
+          } catch (readErr) {
+            console.error('Read failed:', readErr);
+            Alert.alert('❌ Read Failed', 'Could not read data from device.');
+            setLoading(false); // 🔚 End loading
+            return;
+          }
+  
+          const lines = result.trim().split('\n');
+          const okReceived = lines.some((line) => line === 'OK');
+          const macLine = lines.find((line) => line.startsWith('MAC:'));
+  
+          if (okReceived && macLine) {
+            const mac = macLine.replace('MAC:', '').trim();
+            Alert.alert('✅ Connected', `MAC: ${mac}`);
+            navigation.navigate('DeviceRegistration', { device, mac });
+          } else {
+            console.log('Response content:', result);
+            Alert.alert('❌ Auth Failed', 'Device did not respond with proper handshake.');
+          }
+  
+          setLoading(false); // 🔚 End loading
+        }, 1000);
+      } else {
+        Alert.alert('❌ Connection Failed', 'Could not connect to device.');
+        setLoading(false); // 🔚 End loading
+      }
     } catch (err) {
-      Alert.alert('❌ Pairing Failed', err.message);
+      console.error('Pairing Error:', err);
+      Alert.alert('Connection Error', err.message);
+      setLoading(false); // 🔚 End loading
     }
   };
+  
+  
 
   const instructions = {
     en: [
       'Turn on both devices and ensure Bluetooth is enabled.',
       'Click search to discover available devices.',
-      'Select the Azan player from the list to pair.',
+      'Select the Azan player from the list to pair or connect.',
     ],
     ar: [
       'قم بتشغيل كلا الجهازين وتأكد من تمكين البلوتوث.',
-      'انقر فوق البحث لاكتشاف الأجهزة المتاحة.',
+      'انقر على "بحث" لاكتشاف الأجهزة المتاحة.',
       'حدد جهاز الأذان من القائمة للاتصال.',
     ],
   };
@@ -107,8 +186,10 @@ const Pairing = ({ navigation }) => {
     <ImageBackground
       source={require('../assets/w-bg.jpg')}
       style={styles.container}
+      
       resizeMode="cover"
     >
+        <ConnectionStatusIndicator />
       <View style={styles.innerContainer}>
         <TouchableOpacity style={styles.searchButton} onPress={handleSearch}>
           <Text style={styles.searchText}>
@@ -117,38 +198,45 @@ const Pairing = ({ navigation }) => {
         </TouchableOpacity>
 
         <View style={styles.deviceList}>
-          <FlatList
-            data={devices}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <TouchableOpacity onPress={() => handleDeviceSelect(item.id)}>
-                <Text
-                  style={[
-                    styles.deviceItem,
-                    selectedDeviceId === item.id && styles.selectedDevice,
-                  ]}
-                >
-                  {item.name || 'Unnamed'} ({item.id})
-                </Text>
-              </TouchableOpacity>
-            )}
-            ListEmptyComponent={
-              !scanning && (
-                <Text style={{ color: '#ccc', textAlign: 'center' }}>
-                  No devices found. Try scanning again.
-                </Text>
-              )
-            }
-          />
+          {devices.length === 0 ? (
+            <Text style={{ color: '#ccc', textAlign: 'center' }}>
+              {scanning ? 'Scanning for Azan Player...' : 'No Azan Player found.'}
+            </Text>
+          ) : (
+            <FlatList
+              data={devices}
+              keyExtractor={(item, index) => `${item.id}-${index}`}
+              renderItem={({ item }) => (
+                <TouchableOpacity onPress={() => handleDeviceSelect(item.id)}>
+                  <Text
+                    style={[
+                      styles.deviceItem,
+                      selectedDeviceId === item.id && styles.selectedDevice,
+                    ]}
+                  >
+                    {item.name || 'Unnamed'} ({item.id})
+                  </Text>
+                </TouchableOpacity>
+              )}
+            />
+          )}
         </View>
 
+
         <TouchableOpacity
-          style={[styles.pairButton, !selectedDeviceId && { opacity: 0.5 }]}
+          style={[styles.pairButton, (!selectedDeviceId || loading) && { opacity: 0.5 }]}
           onPress={handlePair}
-          disabled={!selectedDeviceId}
+          disabled={!selectedDeviceId || loading}
         >
-          <Text style={styles.pairText}>Pair</Text>
+          {loading ? (
+            <Text style={styles.pairText}>Connecting...</Text>
+            // OR use spinner:
+            // <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.pairText}>PAIR</Text>
+          )}
         </TouchableOpacity>
+
 
         <View style={styles.instructionBox}>
           <ScrollView>

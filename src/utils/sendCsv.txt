@@ -1,0 +1,30 @@
+// sendCsv.js
+import BluetoothSerial from 'react-native-bluetooth-serial-next';
+import RNFS from 'react-native-fs';
+
+const CHUNK_DELAY = 50;
+
+export const sendCsvOverBluetooth = async (filePath, type) => {
+  try {
+    const isConnected = await BluetoothSerial.isConnected();
+    if (!isConnected) throw new Error('No Bluetooth device connected');
+
+    const lines = (await RNFS.readFile(filePath, 'utf8')).split('\n').filter(line => line.trim());
+    const start = type === 'config' ? 'CONFIG_START\n' : 'AZAN_START\n';
+    const end = type === 'config' ? 'CONFIG_END\n' : 'AZAN_END\n';
+
+    await BluetoothSerial.write(start);
+    for (let i = 0; i < lines.length; i++) {
+      await BluetoothSerial.write(lines[i] + '\n');
+      await delay(CHUNK_DELAY);
+    }
+    await BluetoothSerial.write(end);
+
+    console.log(`✅ ${type}.csv sent successfully`);
+  } catch (error) {
+    console.error(`❌ Failed to send ${type}.csv:`, error);
+    throw error;
+  }
+};
+
+const delay = (ms) => new Promise(res => setTimeout(res, ms));

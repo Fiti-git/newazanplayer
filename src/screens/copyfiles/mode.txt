@@ -37,7 +37,6 @@ const ModeSelection = ({ route, navigation }) => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [progress, setProgress] = useState(0);   // ✅ Progress for sending file
 
   useDisableBack();
 
@@ -86,7 +85,6 @@ const ModeSelection = ({ route, navigation }) => {
     try {
       setLoading(true);
       setError('');
-      setProgress(0);  // ✅ Reset progress at start
 
       console.log('📦 Configuration Data');
       console.log({ mac, country, city, area, latitude, longitude, azanSound, prayers });
@@ -126,10 +124,10 @@ const ModeSelection = ({ route, navigation }) => {
       });
 
       console.log('📤 Sending config.csv...');
-      await sendCsvOverBluetooth(configPath, 'config', setProgress);
+      await sendCsvOverBluetooth(configPath, 'config');
 
       console.log('📤 Sending azan.csv...');
-      await sendCsvOverBluetooth(azanCsvPath, 'azan', setProgress);
+      await sendCsvOverBluetooth(azanCsvPath, 'azan');
 
       await RNFS.unlink(configPath);
       await RNFS.unlink(azanCsvPath);
@@ -164,23 +162,23 @@ const ModeSelection = ({ route, navigation }) => {
               Prayer times will be based on accurate online data.
             </Text>
             {mode === 'online' && (
-              <View style={{ marginTop: 10 }}>
+              <>
                 <TextInput
-                  style={[styles.input, { height: 45 }]}
+                  style={styles.input}
                   placeholder="Enter Wi-Fi SSID"
                   value={ssid}
                   onChangeText={setSsid}
                   placeholderTextColor="#999"
                 />
                 <TextInput
-                  style={[styles.input, { height: 45, marginTop: 10 }]}
+                  style={[styles.input, { flex: 1 }]}
                   placeholder="Enter Wi-Fi Password"
                   value={password}
                   onChangeText={setPassword}
                   placeholderTextColor="#999"
                   secureTextEntry
                 />
-              </View>
+              </>
             )}
           </TouchableOpacity>
 
@@ -200,22 +198,7 @@ const ModeSelection = ({ route, navigation }) => {
 
           {error ? <Text style={{ color: 'red', marginBottom: 10 }}>{error}</Text> : null}
 
-          {loading && (
-            <>
-              <ActivityIndicator style={{ marginTop: 10 }} color="#003a7f" />
-              <View style={{ width: '80%', height: 10, backgroundColor: '#eee', borderRadius: 5, marginTop: 10 }}>
-                <View style={{
-                  width: `${progress}%`,
-                  height: '100%',
-                  backgroundColor: '#003a7f',
-                  borderRadius: 5
-                }} />
-              </View>
-              <Text style={{ marginTop: 5 }}>{progress}% completed</Text>
-            </>
-          )}
-
-          {mode && !loading && (
+          {mode && (
             <TouchableOpacity
               style={styles.finishButton}
               onPress={handleFinish}
@@ -224,6 +207,7 @@ const ModeSelection = ({ route, navigation }) => {
               <Text style={styles.finishText}>
                 {loading ? 'Processing...' : 'Finish'}
               </Text>
+              {loading && <ActivityIndicator style={{ marginTop: 10 }} color="#003a7f" />}
             </TouchableOpacity>
           )}
         </View>

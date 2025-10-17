@@ -12,6 +12,7 @@ import {
 import useDisableBack from '../hooks/useDisableBack.js';
 import styles from '../styles/modeSelectionStyles.js';
 import RNFS from 'react-native-fs';
+import BluetoothSerial from 'react-native-bluetooth-classic';
 import {
   checkDeviceStatus,
   registerNewDevice,
@@ -37,44 +38,33 @@ const ModeSelection = ({ route, navigation }) => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [progress, setProgress] = useState(0);   // ✅ Progress for sending file
 
   useDisableBack();
 
-  const normalize = (str) => str.toLowerCase().replace(/\s+/g, '_');
-
   const generateConfigCSV = async (data) => {
+    const {
+      mac,
+      mode,
+      ssid,
+      password,
+      latitude,
+      longitude,
+      azanSound,
+      prayers,
+    } = data;
+
     const now = new Date();
     const date = now.toISOString().split('T')[0];
     const time = now.toTimeString().split(' ')[0];
 
     const csvHeader = 'mac,mode,ssid,password,latitude,longitude,azan,prayers,date,time\n';
-    const csvBody = `${data.mac},${data.mode},${data.ssid || ''},${data.password || ''},${data.latitude},${data.longitude},${data.azanSound},"${data.prayers.join(',')}",${date},${time}`;
+    const csvBody = `${mac},${mode},${ssid || ''},${password || ''},${latitude},${longitude},${azanSound},"${prayers.join(',')}",${date},${time}`;
     const fullCSV = csvHeader + csvBody;
     const path = `${RNFS.DocumentDirectoryPath}/config.csv`;
 
     await RNFS.writeFile(path, fullCSV, 'utf8');
-    console.log('✅ config.csv generated at:', path);
+    console.log('✅ config.csv generated with date/time at:', path);
     return path;
-  };
-
-  const downloadAzanCsvFromServer = async (filename) => {
-    try {
-      const url = `https://echostics.com/get_csv.php?file=${filename}`;
-      const destPath = `${RNFS.DocumentDirectoryPath}/${filename}`;
-
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Failed to fetch ${filename}`);
-
-      const content = await response.text();
-      await RNFS.writeFile(destPath, content, 'utf8');
-
-      console.log(`📥 Azan CSV downloaded to: ${destPath}`);
-      return destPath;
-    } catch (err) {
-      console.error('❌ Error downloading CSV:', err.message);
-      throw err;
-    }
   };
 
   const handleFinish = async () => {
@@ -86,10 +76,6 @@ const ModeSelection = ({ route, navigation }) => {
     try {
       setLoading(true);
       setError('');
-      setProgress(0);  // ✅ Reset progress at start
-
-      console.log('📦 Configuration Data');
-      console.log({ mac, country, city, area, latitude, longitude, azanSound, prayers });
 
       const deviceStatus = await checkDeviceStatus(mac);
       if (deviceStatus.status === 'New') {
@@ -109,31 +95,40 @@ const ModeSelection = ({ route, navigation }) => {
       });
 
       const configPath = await generateConfigCSV({
-        mac, mode, ssid, password, latitude, longitude, azanSound, prayers
+        mac,
+        mode,
+        ssid,
+        password,
+        latitude,
+        longitude,
+        azanSound,
+        prayers,
       });
 
-      const azanFileName = `${normalize(country)}_${normalize(city)}_${normalize(area)}.csv`;
-      console.log('📁 CSV File to Use:', azanFileName);
-
-      const azanCsvPath = await downloadAzanCsvFromServer(azanFileName);
+      const azanCsvPath = `${RNFS.DocumentDirectoryPath}/${country}_${city}_${area}.csv`;
 
       await uploadCsvLog({
         mac_address: mac,
         upload_source: mode,
         csv_status: 'success',
-        file_path: azanFileName,
+        file_path: `${country}_${city}_${area}.csv`,
         notes: 'Upload via mobile app',
       });
 
       console.log('📤 Sending config.csv...');
-      await sendCsvOverBluetooth(configPath, 'config', setProgress);
+      await sendCsvOverBluetooth(configPath, 'config');
 
-      console.log('📤 Sending azan.csv...');
-      await sendCsvOverBluetooth(azanCsvPath, 'azan', setProgress);
+      // ✅ Option 1: Check for azan CSV before sending
+      const azanExists = await RNFS.exists(azanCsvPath);
+      if (azanExists) {
+        console.log('📤 Sending azan.csv...');
+        await sendCsvOverBluetooth(azanCsvPath, 'azan');
+        await RNFS.unlink(azanCsvPath);
+      } else {
+        console.warn('⚠️ azan.csv not found at path:', azanCsvPath);
+      }
 
       await RNFS.unlink(configPath);
-      await RNFS.unlink(azanCsvPath);
-
       console.log('✅ CSVs sent and cleaned up');
       navigation.navigate('PushScreen');
     } catch (err) {
@@ -164,23 +159,23 @@ const ModeSelection = ({ route, navigation }) => {
               Prayer times will be based on accurate online data.
             </Text>
             {mode === 'online' && (
-              <View style={{ marginTop: 10 }}>
+              <>
                 <TextInput
-                  style={[styles.input, { height: 45 }]}
+                  style={styles.input}
                   placeholder="Enter Wi-Fi SSID"
                   value={ssid}
                   onChangeText={setSsid}
                   placeholderTextColor="#999"
                 />
                 <TextInput
-                  style={[styles.input, { height: 45, marginTop: 10 }]}
+                  style={[styles.input, { flex: 1 }]}
                   placeholder="Enter Wi-Fi Password"
                   value={password}
                   onChangeText={setPassword}
                   placeholderTextColor="#999"
                   secureTextEntry
                 />
-              </View>
+              </>
             )}
           </TouchableOpacity>
 
@@ -200,22 +195,7 @@ const ModeSelection = ({ route, navigation }) => {
 
           {error ? <Text style={{ color: 'red', marginBottom: 10 }}>{error}</Text> : null}
 
-          {loading && (
-            <>
-              <ActivityIndicator style={{ marginTop: 10 }} color="#003a7f" />
-              <View style={{ width: '80%', height: 10, backgroundColor: '#eee', borderRadius: 5, marginTop: 10 }}>
-                <View style={{
-                  width: `${progress}%`,
-                  height: '100%',
-                  backgroundColor: '#003a7f',
-                  borderRadius: 5
-                }} />
-              </View>
-              <Text style={{ marginTop: 5 }}>{progress}% completed</Text>
-            </>
-          )}
-
-          {mode && !loading && (
+          {mode && (
             <TouchableOpacity
               style={styles.finishButton}
               onPress={handleFinish}
@@ -224,6 +204,7 @@ const ModeSelection = ({ route, navigation }) => {
               <Text style={styles.finishText}>
                 {loading ? 'Processing...' : 'Finish'}
               </Text>
+              {loading && <ActivityIndicator style={{ marginTop: 10 }} color="#003a7f" />}
             </TouchableOpacity>
           )}
         </View>

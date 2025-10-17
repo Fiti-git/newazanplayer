@@ -1,45 +1,57 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, ImageBackground } from 'react-native';
-import useDisableBack from '../hooks/useDisableBack.js';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ActivityIndicator,
+  TouchableOpacity,
+  ImageBackground,
+  Animated,
+} from 'react-native';
+import useDisableBack from '../hooks/useDisableBack';
 
 const FinalSetupScreen = ({ navigation }) => {
   useDisableBack();
   const [showSuccess, setShowSuccess] = useState(false);
+  const fadeAnim = useState(new Animated.Value(0))[0];
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowSuccess(true);
-    }, 3000); // 3 seconds loading
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 800,
+        useNativeDriver: true,
+      }).start();
+    }, 3000); // simulate 3s processing
 
     return () => clearTimeout(timer);
   }, []);
 
   const handleFinish = () => {
-    navigation.navigate('HomeScreen'); // Change to your final route
+    navigation.navigate('HomeScreen'); // Update to correct screen
   };
 
   return (
     <ImageBackground
-      source={require('./assets/w-bg.jpg')} // Replace with your background image path
+      source={require('./assets/w-bg.jpg')} // Centralize if needed later
       style={styles.backgroundImage}
     >
       <View style={styles.container}>
-        {/* Background spinner */}
-        {!showSuccess && (
+        {!showSuccess ? (
           <>
             <ActivityIndicator size="large" color="#fff" />
             <Text style={styles.loadingText}>Pushing settings to Azan Player...</Text>
           </>
-        )}
-
-        {/* Success Popup */}
-        {showSuccess && (
-          <View style={styles.popupCard}>
-            <Text style={styles.successText}>Settings{'\n'}successfully pushed{'\n'}to Azan Player</Text>
+        ) : (
+          <Animated.View style={[styles.popupCard, { opacity: fadeAnim }]}>
+            <Text style={styles.successText}>
+              Settings{'\n'}successfully pushed{'\n'}to Azan Player
+            </Text>
             <TouchableOpacity style={styles.button} onPress={handleFinish}>
               <Text style={styles.buttonText}>Finish Setup</Text>
             </TouchableOpacity>
-          </View>
+          </Animated.View>
         )}
       </View>
     </ImageBackground>
